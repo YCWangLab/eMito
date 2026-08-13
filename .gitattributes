@@ -1,0 +1,6 @@
+# A trailing tab is meaningful when the final TSV field is empty.
+*.tsv whitespace=-blank-at-eol
+
+# Keep binary research figures out of textual diffs.
+*.png binary
+*.pdf binary

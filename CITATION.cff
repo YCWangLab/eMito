@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use eMito, please cite this repository until the manuscript is published."
+title: "eMito: taxonomy-aware mitochondrial capture probe design"
+type: software
+authors:
+  - name: YCWangLab
+repository-code: "https://github.com/YCWangLab/eMito"
+license: MIT
+version: 0.1.0
+date-released: 2026-08-13
