@@ -6,7 +6,14 @@ import shutil
 import sys
 from typing import Callable, Optional, Sequence
 
-from . import __version__, pipeline, reporting, stage_reporting, taxonomy_reporting
+from . import (
+    __version__,
+    access_reporting,
+    pipeline,
+    reporting,
+    stage_reporting,
+    taxonomy_reporting,
+)
 
 
 HELP = f"""eMito {__version__}
@@ -22,6 +29,7 @@ Commands:
   summarize         Count generation, access, collapse, and final probe sets
   stage-summary     Produce detailed probe and k-mer stage statistics
   taxonomy-summary  Count input genomes, species, genera, and families
+  access-summary    Replay and summarize GC, complexity, and dimer filtering
   info              Show the eMito version and MAFFT availability
 
 Use `emito <command> --help` for command-specific options.
@@ -52,6 +60,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _dispatch(stage_reporting.main, command_args)
     if command == "taxonomy-summary":
         return _dispatch(taxonomy_reporting.main, command_args)
+    if command == "access-summary":
+        return _dispatch(access_reporting.main, command_args)
     if command == "info":
         if command_args:
             print("ERROR: `emito info` does not take arguments", file=sys.stderr)

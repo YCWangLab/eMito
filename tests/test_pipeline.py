@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from emito import access_reporting
 from emito import pipeline
 from emito import cli
 from emito import reporting as mode_merge_statistics
@@ -265,6 +266,24 @@ CCCC
                 ["AAAA", "CCCC", "AAAA"],
             )
 
+    def test_eprobe_access_defaults_and_dimer_self_subtraction(self) -> None:
+        args = pipeline.parse_args([])
+        self.assertEqual((args.gc_min, args.gc_max), (35.0, 65.0))
+        self.assertEqual((args.complexity_min, args.complexity_max), (0.0, 2.0))
+        self.assertEqual(args.dimer_k, 11)
+        self.assertEqual(args.dimer_threshold, 0.15)
+
+        self.assertEqual(
+            pipeline.dimer_scores([("probe_a", "AAAACCCC")], 4),
+            [0.0],
+        )
+        paired = pipeline.dimer_scores(
+            [("probe_a", "AAAACCCC"), ("probe_b", "GGGGTTTT")], 4
+        )
+        self.assertTrue(all(score > 0 for score in paired))
+        self.assertEqual(pipeline.eprobe_dimer_cutoff([1.0, 2.0, 3.0, 4.0], 0.5), 3.0)
+        self.assertEqual(pipeline.eprobe_dimer_cutoff([1.0, 2.0], 5.0), 5.0)
+
     def test_complete_pipeline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -368,8 +387,8 @@ sys.stdout.write(pathlib.Path(sys.argv[-1]).read_text(encoding="ascii"))
                 "100",
                 "--dimer-k",
                 "2",
-                "--dimer-keep-fraction",
-                "1",
+                "--dimer-threshold",
+                "0",
                 "--group-collapse",
             ]
             completed = subprocess.run(command, text=True, capture_output=True)
@@ -656,6 +675,32 @@ sys.stdout.write(pathlib.Path(sys.argv[-1]).read_text(encoding="ascii"))
             self.assertEqual(taxonomy_row["retained_species"], "4")
             self.assertEqual(taxonomy_row["retained_genera"], "3")
             self.assertEqual(taxonomy_row["retained_families"], "2")
+
+            access_report_dir = report_dir / "taxa_access_filters"
+            self.assertEqual(
+                access_reporting.main(
+                    [
+                        "--output-root",
+                        str(output_root),
+                        "--mode",
+                        "taxa",
+                        "--report-dir",
+                        str(access_report_dir),
+                    ]
+                ),
+                0,
+            )
+            with (access_report_dir / "taxa_access_filter_summary.tsv").open(
+                encoding="utf-8", newline=""
+            ) as handle:
+                access_summary = {
+                    row["metric"]: row["value"]
+                    for row in csv.DictReader(handle, delimiter="\t")
+                }
+            self.assertEqual(
+                access_summary["recomputed_assessed"],
+                access_summary["actual_assessed"],
+            )
 
 
 if __name__ == "__main__":

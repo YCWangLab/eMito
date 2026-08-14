@@ -10,6 +10,7 @@ for clusters and legacy workflows that prefer an explicit Python script.
 | `count_emito_mode_merge.py` | `emito summarize` |
 | `count_emito_probe_stages.py` | `emito stage-summary` |
 | `count_input_taxonomy.py` | `emito taxonomy-summary` |
+| `export_publication_metadata.py` | Export compact manuscript source tables from one completed run |
 
 Every argument is forwarded unchanged, for example:
 

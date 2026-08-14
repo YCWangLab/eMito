@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Set, Tuple
 
 
-PIPELINE_VERSION = "0.1.0"
+PIPELINE_VERSION = "0.1.1"
 DEFAULT_METADATA = Path("metadata.tsv")
 DEFAULT_FASTA_DIR = Path("fasta")
 DEFAULT_OUTPUT_ROOT = Path("emito_output")
@@ -219,8 +219,7 @@ class AccessParameters:
     complexity_min: float
     complexity_max: float
     dimer_k: int
-    dimer_min_freq: int
-    dimer_keep_fraction: float
+    dimer_threshold: float
 
 
 @dataclass(frozen=True)
@@ -387,13 +386,38 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "Deduplicate the final merged probe FASTA by exact uppercase ATCG sequence.",
     )
 
-    parser.add_argument("--gc-min", type=float, default=0.0)
-    parser.add_argument("--gc-max", type=float, default=60.0)
+    parser.add_argument(
+        "--gc-min",
+        type=float,
+        default=35.0,
+        help="Minimum GC percentage for eMito-access (eProbe default: 35).",
+    )
+    parser.add_argument(
+        "--gc-max",
+        type=float,
+        default=65.0,
+        help="Maximum GC percentage for eMito-access (eProbe default: 65).",
+    )
     parser.add_argument("--complexity-min", type=float, default=0.0)
     parser.add_argument("--complexity-max", type=float, default=2.0)
-    parser.add_argument("--dimer-k", type=int, default=11)
-    parser.add_argument("--dimer-min-freq", type=int, default=2)
-    parser.add_argument("--dimer-keep-fraction", type=float, default=0.85)
+    parser.add_argument(
+        "--dimer-k",
+        type=int,
+        default=11,
+        help="Reverse-complement k-mer size for the eProbe-compatible dimer score.",
+    )
+    parser.add_argument(
+        "--dimer",
+        "--dimer-threshold",
+        dest="dimer_threshold",
+        type=float,
+        default=0.15,
+        help=(
+            "eProbe-compatible dimer threshold: 0<x<1 uses the x quantile "
+            "(default 0.15), x>=1 is an absolute score, and x<=0 disables "
+            "dimer filtering."
+        ),
+    )
     parser.add_argument(
         "--force",
         action="store_true",
@@ -437,10 +461,8 @@ def validate_args(args: argparse.Namespace) -> Set[str]:
         raise PipelineError("GC bounds must satisfy 0 <= min <= max <= 100")
     if args.complexity_min > args.complexity_max:
         raise PipelineError("Complexity minimum exceeds maximum")
-    if args.dimer_k < 1 or args.dimer_min_freq < 1:
-        raise PipelineError("Dimer k and minimum frequency must be >= 1")
-    if not 0 < args.dimer_keep_fraction <= 1:
-        raise PipelineError("--dimer-keep-fraction must be in (0,1]")
+    if args.dimer_k < 1:
+        raise PipelineError("--dimer-k must be >= 1")
     return modes
 
 
@@ -1868,27 +1890,60 @@ def dust_complexity(sequence: str) -> float:
     return round(pairs / (len(sequence) - 3), 4)
 
 
-def dimer_scores(records: Sequence[Tuple[str, str]], k: int, minimum_frequency: int) -> List[float]:
+def dimer_scores(records: Sequence[Tuple[str, str]], k: int) -> List[float]:
+    """Calculate the eProbe-compatible ``DimerCalculatorFast`` score.
+
+    Reverse-complement k-mers from the complete post-GC/complexity probe pool
+    are indexed. Each probe's forward k-mers query that index, its own reverse-
+    complement contribution is subtracted, and the remaining inter-probe signal
+    is normalized by both k-mer count and pool size.
+    """
     if not records:
         return []
-    frequency: Counter[str] = Counter()
-    for _, sequence in records:
+
+    sequences = [sequence.upper() for _, sequence in records]
+    reverse_kmer_frequency: Counter[str] = Counter()
+    for sequence in sequences:
         rc = reverse_complement(sequence)
         if len(rc) >= k:
-            frequency.update(rc[index : index + k] for index in range(len(rc) - k + 1))
-    retained = {key: value for key, value in frequency.items() if value >= minimum_frequency}
-    probe_count = len(records)
+            reverse_kmer_frequency.update(
+                rc[index : index + k] for index in range(len(rc) - k + 1)
+            )
+
+    probe_count = len(sequences)
     scores: List[float] = []
-    for _, sequence in records:
+    for sequence in sequences:
         if len(sequence) < k:
             scores.append(0.0)
-        else:
-            total = sum(
-                retained.get(sequence[index : index + k], 0)
-                for index in range(len(sequence) - k + 1)
+            continue
+
+        rc = reverse_complement(sequence)
+        self_reverse_frequency = Counter(
+            rc[index : index + k] for index in range(len(rc) - k + 1)
+        )
+        total_frequency = 0
+        kmer_count = len(sequence) - k + 1
+        for index in range(kmer_count):
+            kmer = sequence[index : index + k]
+            other_frequency = max(
+                reverse_kmer_frequency.get(kmer, 0)
+                - self_reverse_frequency.get(kmer, 0),
+                0,
             )
-            scores.append((total / probe_count) * 100.0)
+            total_frequency += other_frequency
+        scores.append(round(total_frequency / (kmer_count * probe_count) * 10000, 2))
     return scores
+
+
+def eprobe_dimer_cutoff(scores: Sequence[float], threshold: float) -> float:
+    """Resolve eProbe's quantile/absolute dual-mode dimer threshold."""
+    if threshold <= 0 or not scores:
+        return math.inf
+    if threshold < 1.0:
+        ordered = sorted(scores)
+        index = min(int(threshold * len(ordered)), len(ordered) - 1)
+        return ordered[index]
+    return threshold
 
 
 def run_access_task(task: AccessTask) -> Dict[str, int]:
@@ -1898,23 +1953,31 @@ def run_access_task(task: AccessTask) -> Dict[str, int]:
         for header, sequence in iter_fasta(input_path)
         if DNA_RE.fullmatch(sequence)
     ]
-    scores = dimer_scores(
-        records, task.parameters.dimer_k, task.parameters.dimer_min_freq
-    )
-    assessed: List[Tuple[str, str, float, float, float]] = []
-    for (header, sequence), dimer_score in zip(records, scores):
+    # Match eProbe's order: absolute GC/DUST filters first, then construct the
+    # dimer pool only from probes that passed those two filters.
+    stage_one: List[Tuple[str, str, float, float]] = []
+    for header, sequence in records:
         gc = gc_percent(sequence)
         complexity = dust_complexity(sequence)
         if (
             task.parameters.gc_min <= gc <= task.parameters.gc_max
             and task.parameters.complexity_min <= complexity <= task.parameters.complexity_max
         ):
-            assessed.append((header, sequence, gc, complexity, dimer_score))
-    assessed.sort(key=lambda row: row[4])
-    keep_count = int(task.parameters.dimer_keep_fraction * len(assessed))
-    if keep_count < 1:
-        keep_count = len(assessed)
-    assessed = assessed[:keep_count]
+            stage_one.append((header, sequence, gc, complexity))
+
+    if len(stage_one) > 1 and task.parameters.dimer_threshold > 0:
+        dimer_input = [(header, sequence) for header, sequence, _, _ in stage_one]
+        scores = dimer_scores(dimer_input, task.parameters.dimer_k)
+        cutoff = eprobe_dimer_cutoff(scores, task.parameters.dimer_threshold)
+    else:
+        scores = [0.0] * len(stage_one)
+        cutoff = math.inf
+
+    assessed = [
+        (header, sequence, gc, complexity, dimer_score)
+        for (header, sequence, gc, complexity), dimer_score in zip(stage_one, scores)
+        if dimer_score <= cutoff
+    ]
     assessed.sort(key=lambda row: (row[4], row[3], row[2]))
     deduplicated: List[Tuple[str, str, float, float, float]] = []
     seen: Set[str] = set()
@@ -2205,8 +2268,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             complexity_min=args.complexity_min,
             complexity_max=args.complexity_max,
             dimer_k=args.dimer_k,
-            dimer_min_freq=args.dimer_min_freq,
-            dimer_keep_fraction=args.dimer_keep_fraction,
+            dimer_threshold=args.dimer_threshold,
         )
         terminal: Dict[str, List[Tuple[Target, Path]]] = {}
         mode_options = {
