@@ -25,9 +25,12 @@ Generate all tables after running both manuscript plotting scripts:
 
 ```bash
 python scripts/export_publication_metadata.py \
-  --pipeline-root /lustre/elzd_2023_000111/zcb/mitocapture04/Pipeline/eMito_pipeline_v3_2 \
-  --plot-dir /lustre/elzd_2023_000111/zcb/mitocapture04/plot \
-  --output-dir /lustre/elzd_2023_000111/zcb/mitocapture04/Pipeline/eMito_publication_metadata
+  --pipeline-root /path/to/completed_emito_run \
+  --plot-dir /path/to/generated_plot_tables \
+  --output-dir metadata
 ```
 
-The exporter does not modify the pipeline result.
+Replace the two `/path/to/...` placeholders with locations on your own system.
+The exporter does not modify the pipeline result. Paths recorded in exported
+plot tables are stored relative to `--pipeline-root`, so the publication tables
+remain portable and do not expose machine-specific directory layouts.
