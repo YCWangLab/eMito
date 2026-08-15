@@ -111,7 +111,51 @@ def write_parameter_table(path: Path, config: Mapping[str, object]) -> None:
             writer.writerow((key, value))
 
 
-def copy_plot_tables(plot_dir: Path, output_dir: Path) -> None:
+def make_pipeline_paths_portable(
+    source: Path,
+    destination: Path,
+    pipeline_root: Path,
+) -> None:
+    """Copy a TSV while making pipeline-output paths root-relative."""
+    with source.open("rt", encoding="utf-8", newline="") as input_handle:
+        reader = csv.DictReader(input_handle, delimiter="\t")
+        if reader.fieldnames is None:
+            raise ExportError(f"Plot source table has no header: {source}")
+        path_columns = [
+            name
+            for name in ("Output_fasta", "Terminal_fasta")
+            if name in reader.fieldnames
+        ]
+        with destination.open("wt", encoding="utf-8", newline="") as output_handle:
+            writer = csv.DictWriter(
+                output_handle,
+                fieldnames=reader.fieldnames,
+                delimiter="\t",
+                lineterminator="\n",
+            )
+            writer.writeheader()
+            for row in reader:
+                for column in path_columns:
+                    value = row.get(column, "")
+                    if not value:
+                        continue
+                    candidate = Path(value)
+                    if not candidate.is_absolute():
+                        continue
+                    try:
+                        row[column] = candidate.relative_to(pipeline_root).as_posix()
+                    except ValueError as exc:
+                        raise ExportError(
+                            f"{column} path is outside --pipeline-root: {candidate}"
+                        ) from exc
+                writer.writerow(row)
+
+
+def copy_plot_tables(
+    plot_dir: Path,
+    output_dir: Path,
+    pipeline_root: Path,
+) -> None:
     missing = [
         plot_dir / source_name
         for source_name in PLOT_TABLES.values()
@@ -124,7 +168,11 @@ def copy_plot_tables(plot_dir: Path, output_dir: Path) -> None:
             f"genus-tree plotting scripts first:\n{formatted}"
         )
     for destination_name, source_name in PLOT_TABLES.items():
-        shutil.copy2(plot_dir / source_name, output_dir / destination_name)
+        make_pipeline_paths_portable(
+            plot_dir / source_name,
+            output_dir / destination_name,
+            pipeline_root,
+        )
 
 
 def write_manifest(path: Path) -> None:
@@ -230,7 +278,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 output_dir / "taxa_access_filter_summary.tsv",
             )
 
-        copy_plot_tables(plot_dir, output_dir)
+        copy_plot_tables(plot_dir, output_dir, pipeline_root)
         write_manifest(output_dir / "EXPORT_MANIFEST.tsv")
         print(f"Publication metadata export complete: {output_dir}")
         for path in sorted(output_dir.glob("*.tsv"), key=lambda item: item.name):
