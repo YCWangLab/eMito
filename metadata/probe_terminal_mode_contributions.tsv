@@ -1,0 +1,10 @@
+mode	unique_probe_sequences	new_sequences_added_in_taxa_group_node_order	sequences_already_present_in_earlier_modes	cumulative_unique_sequences
+taxa	463195	463195	0	463195
+group	26095	24167	1928	487362
+node	334019	176855	157164	664217
+
+overlap	unique_probe_sequences
+taxa_and_group	1928
+taxa_and_node	150666
+group_and_node	6528
+taxa_and_group_and_node	30

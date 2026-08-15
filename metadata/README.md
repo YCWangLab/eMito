@@ -9,6 +9,7 @@ Expected generated files:
 
 | File | Contents |
 |---|---|
+| `EXPORT_MANIFEST.tsv` | File-level inventory and description of the exported tables |
 | `pipeline_parameters.tsv` | Probe-generation, optional-mode, and filtering parameters |
 | `input_taxonomy_summary.tsv` | Genome, species, genus, and family counts before/after input QC |
 | `mode_processing_summary.tsv` | Generation/access/collapse counts for each mode |
