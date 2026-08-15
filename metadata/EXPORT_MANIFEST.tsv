@@ -1,0 +1,11 @@
+file	description
+pipeline_parameters.tsv	Resolved parameters that materially affect probe generation and filtering
+input_taxonomy_summary.tsv	Input and retained genome/species/genus/family counts
+mode_processing_summary.tsv	Generation, access, collapse, and terminal counts by mode
+final_merge_summary.tsv	Final cross-mode merge and sequence-deduplication counts
+probe_stage_summary.tsv	Aggregate FASTA counts at all probe-processing stages
+probe_terminal_mode_contributions.tsv	Unique and overlapping terminal contributions from taxa/group/node
+taxa_access_filter_summary.tsv	Sequential GC, complexity, dimer, and exact-dedup counts for taxa access
+panel_A_probe_counts.tsv	Absolute counts and plotted percentages underlying probe-filtering panel A
+panel_B_focal_probe_counts.tsv	Focal taxon counts underlying panel B
+genus_probe_counts.tsv	Final probe counts grouped by genus for the circular tree

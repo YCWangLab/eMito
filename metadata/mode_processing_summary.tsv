@@ -1,0 +1,4 @@
+mode	generation_input_files	generation_merged_sequences	generation_unique_after_dedup	access_executed	access_merged_sequences	access_unique_after_dedup	collapse_executed	collapse_merged_sequences	collapse_unique_after_dedup	terminal_stage_used_for_final	terminal_merged_sequences	terminal_unique_after_dedup
+taxa	303	744531	733604	YES	470392	463195	NO	NA	NA	access	470392	463195
+group	17	26095	26095	NO	NA	NA	NO	NA	NA	generation	26095	26095
+node	103	337230	334019	NO	NA	NA	NO	NA	NA	generation	337230	334019

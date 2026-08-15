@@ -136,6 +136,10 @@ deduplication is enabled.
 | `--node-rank` | family |
 | `--node-step` | 5 bp |
 | `--taxa-access` | enabled |
+| `--gc-min` / `--gc-max` | 35% / 65% |
+| `--complexity-min` / `--complexity-max` | 0 / 2 |
+| `--dimer-k` | 11 bp |
+| `--dimer` | 0.15 |
 | all other per-mode access/collapse switches | disabled |
 | `--final-dedup` | enabled |
 
@@ -222,10 +226,16 @@ all species or groups merged together. If both are enabled, the order is:
 generation -> access -> collapse
 ```
 
-Default `access` filters are GC 0–60%, DUST-like complexity 0–2, dimer k=11,
-minimum dimer frequency 2, and the lowest-scoring 85% retained. `collapse`
-groups probes by accession and greedily retains non-overlapping probes in
-coordinate order.
+Default `access` filters match the corresponding eProbe assessment settings:
+GC 35–65%, DUST-like complexity 0–2, dimer k=11, and `--dimer 0.15`. The
+dimer score measures reverse-complement k-mer complementarity between probes
+that already passed GC and complexity filters; each probe's self-contribution
+is subtracted. A dimer value between 0 and 1 selects the corresponding score
+quantile as an inclusive cutoff, a value of 1 or greater is an absolute score
+cutoff, and a value of 0 or less disables dimer filtering. Exact duplicate
+sequences are then removed within each assessed target. `collapse` groups
+probes by accession and greedily retains non-overlapping probes in coordinate
+order.
 
 The terminal output of each enabled generation mode is then merged. Exact
 uppercase ATCG-sequence deduplication is enabled by default (`--final-dedup`)
@@ -263,7 +273,25 @@ emito taxonomy-summary --output-root emito_output
 
 # Detailed probe and k-mer counts at every stage
 emito stage-summary --output-root emito_output
+
+# Recompute and summarize the per-filter eMito-access counts
+emito access-summary --output-root emito_output --mode taxa
 ```
+
+## Figures and source data
+
+The workflow and manuscript figures are stored in [`figures/`](figures/).
+Their compact, tab-separated source tables are generated from a completed run
+with [`scripts/export_publication_metadata.py`](scripts/export_publication_metadata.py);
+see [`metadata/README.md`](metadata/README.md) for the expected files.
+
+![Probe filtering and focal taxa](figures/probe_filtering_summary.png)
+
+The genus-level distribution is provided as an editable vector figure:
+[`final_probe_genus_tree.pdf`](figures/final_probe_genus_tree.pdf). Additional
+evaluation figures include [`capture_vs_shotgun.pdf`](figures/capture_vs_shotgun.pdf),
+[`pathphynder_ovis_bos.pdf`](figures/pathphynder_ovis_bos.pdf), and
+[`rarefaction_ovis.pdf`](figures/rarefaction_ovis.pdf).
 
 ## Reproducibility
 
