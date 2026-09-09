@@ -11,6 +11,7 @@ Expected generated files:
 |---|---|
 | `EXPORT_MANIFEST.tsv` | File-level inventory and description of the exported tables |
 | `pipeline_parameters.tsv` | Probe-generation, optional-mode, and filtering parameters |
+| `mode_routing.tsv` | Per-species taxa/group routing decisions and selected accessions after input QC |
 | `input_taxonomy_summary.tsv` | Genome, species, genus, and family counts before/after input QC |
 | `mode_processing_summary.tsv` | Generation/access/collapse counts for each mode |
 | `final_merge_summary.tsv` | Final merge and exact-sequence deduplication counts |

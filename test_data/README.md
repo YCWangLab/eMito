@@ -6,6 +6,8 @@ temporary directory. This keeps the repository small while exercising the
 complete pipeline, including:
 
 - species-level and subgroup-level alignment;
+- per-species mode routing, including a lone taxonomic-subgroup fallback and
+  an explicit same-TaxID population/exception group;
 - circular-origin and reverse-complement normalization;
 - short-genome exclusion and non-ATCG window removal;
 - species/genus and subgroup specificity;

@@ -14,8 +14,8 @@ integration in one reproducible workflow.
 
 | Mode | Purpose | Input unit |
 |---|---|---|
-| `taxa` | Per-species probes filtered by species- and genus-specific k-mers | Genomes directly assigned to each species |
-| `group` | Subspecies- or population-specific probes | Genomes with a non-empty subgroup label |
+| `taxa` | Per-species probes filtered by species- and genus-specific k-mers | Direct species genomes, or one true taxonomic subgroup as fallback when no direct genome exists |
+| `group` | Subspecies- or population-specific probes | Species with multiple represented subgroups, plus explicit user-defined groups/populations |
 | `node` | Taxonomy-node tiling | One selected mitogenome per requested taxonomic node |
 | `access` | GC, complexity, and dimer assessment | Each generated target probe FASTA independently |
 | `collapse` | Coordinate-aware probe collapsing | Each target probe FASTA independently |
@@ -72,22 +72,49 @@ accession_id    species_name    taxid    subgroup_label
 | `taxid` | Actual NCBI TaxID for the record; it is not replaced by the species TaxID |
 | `subgroup_label` | Subspecies/population name; leave empty for a species-level genome |
 
-Example:
+Expanded example (tabs separate the four columns):
 
 ```text
-accession_id    species_name    taxid    subgroup_label
-NC_012920.1     Homo sapiens    9606
-NC_002008.4     Canis lupus     9615     Canis lupus familiaris
+accession_id  species_name          taxid   subgroup_label
+NC_006853     Bos taurus            9913
+NC_005044     Capra hircus          9925
+NC_012920.1   Homo sapiens          9606
+NC_002008.4   Canis lupus           9615    Canis lupus familiaris
+MZ042317.1    Canis lupus           143281  Canis lupus baileyi
+FJ032363.2    Canis lupus           554455  Canis lupus laniger
+NC_013840     Cervus hanglu         84702   Cervus hanglu yarkandensis
+EU725621.2    Homo sapiens          9606    Ancient_modern
+D38113.1      Homo sapiens          9606    Modern
+FN673705.1    Homo sapiens          741158  Homo sapiens subsp. 'Denisova'
+AM948965      Homo sapiens          63221   Homo sapiens neanderthalensis
+KF683087.1    Homo heidelbergensis  1425170 Homo heidelbergensis
 ```
 
-The `subgroup_label` controls mode membership:
+These rows demonstrate multiple direct genomes from different genera, several
+subgroups of the same species, taxonomy-defined subspecies, user-defined
+population labels, and the intentional *Homo heidelbergensis* exception. The
+`taxid` always remains the actual record TaxID; routing never rewrites it to the
+species TaxID.
 
-- `taxa` uses all genomes whose subgroup label is empty. These are the FASTA
-  files directly under a species directory. If a species also contains
-  subgroup genomes, its direct species-level genomes still participate in
-  `taxa`; only the subgroup genomes are excluded from that mode.
-- `group` uses all genomes whose subgroup label is non-empty.
+After minimum-length filtering, eMito resolves mode membership per species:
+
+- `taxa` prefers genomes with an empty subgroup label. If these exist, labelled
+  subgroup genomes from the same species are not mixed into its species-level
+  calculation. If there is no direct genome and exactly one represented
+  taxonomy-defined subgroup (actual TaxID differs from species TaxID), those
+  genomes are used as a species-level fallback while retaining their original
+  metadata and directory labels.
+- `group` uses all labelled genomes when at least two subgroup labels are
+  represented under a species. A single explicit user-defined group or
+  population is also retained when its record TaxID equals the species TaxID;
+  this supports labels such as `Modern`, `Ancient_modern`, and the intentional
+  *Homo heidelbergensis* exception. A lone taxonomy-defined subgroup routed to
+  `taxa` is not also emitted as a one-member group comparison.
 - `node` uses all length-qualified genomes, including subgroup genomes.
+
+The complete decision for every species is written to
+`00_input_qc/mode_routing.tsv`, including the exact accessions passed to `taxa`
+and `group`.
 
 ### NCBI taxonomy
 
@@ -169,12 +196,14 @@ Use `emito run --help` for every parameter and its default.
 
 ### Alignment and windows
 
-Genomes are aligned within species or within subgroup. An `NC_` accession is
-preferred as reference. eMito normalizes strand and circular origin, runs
-MAFFT, and uses shared reference-alignment coordinates to generate independent
-windows for every accession. Default windows are 52 bp, with probe step 5 and
-k-mer step 1. Forward and reverse-complement k-mers are combined for presence
-counting; probes are generated in the forward orientation.
+Direct genomes are aligned within species and labelled genomes within subgroup.
+An `NC_` accession is preferred as reference. eMito normalizes strand and
+circular origin, runs MAFFT, and uses shared reference-alignment coordinates to
+generate independent windows for every accession. A single-subgroup `taxa`
+fallback therefore uses the alignment already built for that subgroup; records
+are never concatenated into one genome. Default windows are 52 bp, with probe
+step 5 and k-mer step 1. Forward and reverse-complement k-mers are combined for
+presence counting; probes are generated in the forward orientation.
 
 ### Representative k-mers
 
@@ -191,7 +220,7 @@ Repeated occurrences within one genome count as presence in one individual.
 
 ### `taxa`
 
-For every species, eMito combines:
+For every routed species input, eMito combines:
 
 1. k-mers unique to that species among all species representative sets; and
 2. k-mers unique to its genus among all genera, restricted back to that
@@ -204,11 +233,13 @@ they do not create separate genus probe output files.
 
 ### `group`
 
-Representative k-mers are generated for every non-empty subgroup label.
-K-mers present in only one subgroup representative set are intersected with
-that subgroup's individual probe windows, then merged and deduplicated into one
-Group-specific probe FASTA per subgroup. Specificity is evaluated globally
-against every subgroup represented in the input metadata.
+Representative k-mers are generated for every subgroup selected by the routing
+rules above. K-mers present in only one selected subgroup representative set
+are intersected with that subgroup's individual probe windows, then merged and
+deduplicated into one Group-specific probe FASTA per subgroup. Specificity is
+evaluated globally against every subgroup selected for `group`; a lone
+taxonomy-defined subgroup used as the species fallback is not included in this
+comparison.
 
 ### `node`
 

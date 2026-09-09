@@ -178,6 +178,7 @@ def copy_plot_tables(
 def write_manifest(path: Path) -> None:
     descriptions = {
         "pipeline_parameters.tsv": "Resolved parameters that materially affect probe generation and filtering",
+        "mode_routing.tsv": "Per-species taxa/group input decisions and accession membership after length QC",
         "input_taxonomy_summary.tsv": "Input and retained genome/species/genus/family counts",
         "mode_processing_summary.tsv": "Generation, access, collapse, and terminal counts by mode",
         "final_merge_summary.tsv": "Final cross-mode merge and sequence-deduplication counts",
@@ -209,6 +210,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         config = load_config(pipeline_root / "00_config.json")
         write_parameter_table(output_dir / "pipeline_parameters.tsv", config)
+        routing_source = pipeline_root / "00_input_qc" / "mode_routing.tsv"
+        if not routing_source.is_file():
+            raise ExportError(
+                "Mode-routing audit does not exist; rerun this dataset with "
+                f"eMito 0.1.4 or later: {routing_source}"
+            )
+        shutil.copy2(routing_source, output_dir / "mode_routing.tsv")
 
         require_success(
             taxonomy_reporting.main(

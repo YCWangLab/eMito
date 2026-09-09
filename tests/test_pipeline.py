@@ -320,6 +320,11 @@ sys.stdout.write(pathlib.Path(sys.argv[-1]).read_text(encoding="ascii"))
             self.add_taxon(nodes, names, 40, 1, "family", "Familia two")
             self.add_taxon(nodes, names, 41, 40, "genus", "GenusC")
             self.add_taxon(nodes, names, 42, 41, "species", "GenusC gamma")
+            self.add_taxon(nodes, names, 50, 40, "genus", "GenusD")
+            self.add_taxon(nodes, names, 51, 50, "species", "GenusD epsilon")
+            self.add_taxon(nodes, names, 52, 51, "subspecies", "GenusD epsilon subOnly")
+            self.add_taxon(nodes, names, 60, 40, "genus", "GenusE")
+            self.add_taxon(nodes, names, 61, 60, "species", "GenusE zeta")
             self.write(nodes_path, "".join(nodes))
             self.write(names_path, "".join(names))
 
@@ -336,6 +341,15 @@ sys.stdout.write(pathlib.Path(sys.argv[-1]).read_text(encoding="ascii"))
                 ("AB000007.1", "GenusA alpha", 23, "GenusA alpha subB", "CGCGGGGGTTTT"),
                 # N-containing windows must be dropped from all generated window files.
                 ("AB000008.1", "GenusA alpha", 23, "GenusA alpha subB", "CGCGNNNNATAT"),
+                # With no direct species genome and only one true taxonomic
+                # subgroup, these records must be routed to taxa as a species
+                # fallback and omitted from group mode.
+                ("AB000011.1", "GenusD epsilon", 52, "GenusD epsilon subOnly", "ACGTACGTAAAA"),
+                ("AB000012.1", "GenusD epsilon", 52, "GenusD epsilon subOnly", "ACGTACGTAAAT"),
+                # A labelled record whose actual TaxID is already the species
+                # TaxID is an explicit group/population, not a taxonomic
+                # subgroup fallback. This models the Heidelbergensis exception.
+                ("AB000013.1", "GenusE zeta", 61, "Special population", "GGGGAAAATTTT"),
                 # Input-length QC must remove this partial record before it is
                 # organized, aligned or counted as an individual.
                 ("AB000010.1", "GenusA alpha", 21, "", "AA"),
@@ -481,7 +495,7 @@ sys.stdout.write(pathlib.Path(sys.argv[-1]).read_text(encoding="ascii"))
                 encoding="utf-8", newline=""
             ) as handle:
                 taxa_manifest = list(csv.DictReader(handle, delimiter="\t"))
-            self.assertEqual(len(taxa_manifest), 4)
+            self.assertEqual(len(taxa_manifest), 5)
             self.assertTrue(all(row["rank"] == "species" for row in taxa_manifest))
             self.assertTrue(
                 all(row["target_id"].startswith("species_taxid_") for row in taxa_manifest)
@@ -499,8 +513,8 @@ sys.stdout.write(pathlib.Path(sys.argv[-1]).read_text(encoding="ascii"))
                     "*.taxa_specific_kmer.fasta"
                 )
             )
-            self.assertEqual(len(genus_kmer_files), 3)
-            self.assertEqual(len(combined_kmer_files), 4)
+            self.assertEqual(len(genus_kmer_files), 4)
+            self.assertEqual(len(combined_kmer_files), 5)
 
             # A sequence shared by the two GenusA species is genus-specific but
             # not species-specific, so it must enter alpha's combined set.
@@ -538,14 +552,17 @@ sys.stdout.write(pathlib.Path(sys.argv[-1]).read_text(encoding="ascii"))
                 }
                 self.assertTrue(combined_sequences <= representative_sequences)
 
-            # Taxa mode must use only genomes directly under the species
-            # directory. Subgroup accessions are reserved for group mode.
-            subgroup_accessions = {
+            # Taxa uses direct species genomes plus a lone true-taxonomic-
+            # subgroup fallback. Multi-subgroup and explicit population inputs
+            # remain excluded from taxa.
+            comparative_subgroup_accessions = {
                 "AB000005.1",
                 "AB000006.1",
                 "AB000007.1",
                 "AB000008.1",
             }
+            fallback_accessions = {"AB000011.1", "AB000012.1"}
+            explicit_group_accessions = {"AB000013.1"}
             taxa_representatives = list(
                 (output_root / "03_eMito_taxa_generate" / "representative_kmers").glob(
                     "*.representative_kmer.fasta"
@@ -557,7 +574,9 @@ sys.stdout.write(pathlib.Path(sys.argv[-1]).read_text(encoding="ascii"))
                 for path in taxa_representatives
                 for header, _ in pipeline.iter_fasta(path)
             }
-            self.assertTrue(taxa_headers.isdisjoint(subgroup_accessions))
+            self.assertTrue(taxa_headers.isdisjoint(comparative_subgroup_accessions))
+            self.assertTrue(taxa_headers.isdisjoint(explicit_group_accessions))
+            self.assertTrue(taxa_headers & fallback_accessions)
 
             group_representatives = list(
                 (output_root / "04_eMito_group_generate" / "representative_kmers").rglob(
@@ -569,7 +588,33 @@ sys.stdout.write(pathlib.Path(sys.argv[-1]).read_text(encoding="ascii"))
                 for path in group_representatives
                 for header, _ in pipeline.iter_fasta(path)
             }
-            self.assertTrue(group_headers & subgroup_accessions)
+            self.assertTrue(group_headers & comparative_subgroup_accessions)
+            self.assertTrue(group_headers & explicit_group_accessions)
+            self.assertTrue(group_headers.isdisjoint(fallback_accessions))
+
+            with (output_root / "00_input_qc" / "mode_routing.tsv").open(
+                encoding="utf-8", newline=""
+            ) as handle:
+                routing = {
+                    row["species_name"]: row
+                    for row in csv.DictReader(handle, delimiter="\t")
+                }
+            self.assertEqual(
+                routing["GenusD epsilon"]["taxa_input_decision"],
+                "single_taxonomic_subgroup_fallback",
+            )
+            self.assertEqual(
+                routing["GenusD epsilon"]["group_input_decision"],
+                "single_taxonomic_subgroup_not_comparable",
+            )
+            self.assertEqual(
+                routing["GenusE zeta"]["taxa_input_decision"],
+                "excluded_explicit_group_without_direct_genome",
+            )
+            self.assertEqual(
+                routing["GenusE zeta"]["group_input_decision"],
+                "explicit_user_defined_group",
+            )
 
             final_fasta = output_root / "07_final_probe_set" / "final_probe_set.fasta"
             final_records = list(pipeline.iter_fasta(final_fasta))
@@ -666,14 +711,14 @@ sys.stdout.write(pathlib.Path(sys.argv[-1]).read_text(encoding="ascii"))
             )
             with taxonomy_report.open(encoding="utf-8", newline="") as handle:
                 taxonomy_row = next(csv.DictReader(handle, delimiter="\t"))
-            self.assertEqual(taxonomy_row["raw_input_genomes"], "10")
+            self.assertEqual(taxonomy_row["raw_input_genomes"], "13")
             self.assertEqual(taxonomy_row["excluded_by_length_qc"], "1")
-            self.assertEqual(taxonomy_row["retained_genomes"], "9")
-            self.assertEqual(taxonomy_row["raw_species"], "4")
-            self.assertEqual(taxonomy_row["raw_genera"], "3")
+            self.assertEqual(taxonomy_row["retained_genomes"], "12")
+            self.assertEqual(taxonomy_row["raw_species"], "6")
+            self.assertEqual(taxonomy_row["raw_genera"], "5")
             self.assertEqual(taxonomy_row["raw_families"], "2")
-            self.assertEqual(taxonomy_row["retained_species"], "4")
-            self.assertEqual(taxonomy_row["retained_genera"], "3")
+            self.assertEqual(taxonomy_row["retained_species"], "6")
+            self.assertEqual(taxonomy_row["retained_genera"], "5")
             self.assertEqual(taxonomy_row["retained_families"], "2")
 
             access_report_dir = report_dir / "taxa_access_filters"

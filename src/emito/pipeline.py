@@ -14,11 +14,15 @@ Stages
 3. eMito-taxa-generate: representative species k-mers plus species- and
    genus-specific k-mers. For each species, its species-specific k-mers and its
    genus-specific k-mers are combined, intersected only with that species'
-   probes, and merged into one Taxa-specific probe set. Only genomes placed
-   directly under a species (empty subgroup label) participate; subgroup
-   genomes are reserved for eMito-group-generate.
+   probes, and merged into one Taxa-specific probe set. Direct species genomes
+   are preferred. If a species has no direct genome and is represented by one
+   true taxonomic subgroup only, that subgroup is used as the species fallback.
 4. eMito-group-generate: representative subgroup k-mers, subgroup-specific
    k-mers, probe intersection, and within-subgroup sequence deduplication.
+   Taxonomic subgroups participate when at least two subgroup labels are
+   represented under the same species. Explicit user-defined groups or
+   populations whose record TaxID equals the species TaxID remain eligible even
+   when they are the only labelled group.
 5. eMito-node-generate: choose one genome per requested taxonomy node (NC_
    preferred, otherwise seeded random selection) and tile probes.
 6. Optionally run eMito-access and/or eMito-collapse independently for each of
@@ -52,7 +56,7 @@ from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Set, Tuple
 
 
-PIPELINE_VERSION = "0.1.1"
+PIPELINE_VERSION = "0.1.4"
 DEFAULT_METADATA = Path("metadata.tsv")
 DEFAULT_FASTA_DIR = Path("fasta")
 DEFAULT_OUTPUT_ROOT = Path("emito_output")
@@ -210,6 +214,19 @@ class GenomeLengthQC:
     minimum_length: int
     retained: bool
     reason: str
+
+
+@dataclass(frozen=True)
+class ModeRoutingRow:
+    species_name: str
+    species_taxid: int
+    direct_genome_count: int
+    subgroup_genome_count: int
+    subgroup_labels: Tuple[str, ...]
+    taxa_input_decision: str
+    taxa_accessions: Tuple[str, ...]
+    group_input_decision: str
+    group_accessions: Tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -719,6 +736,129 @@ def write_genome_length_qc(
     ordered = sorted(rows, key=lambda row: (row.species_name, row.subgroup_label, row.accession))
     write_rows(qc_root / "genome_length_qc.tsv", ordered)
     write_rows(qc_root / "excluded_short_genomes.tsv", (row for row in ordered if not row.retained))
+
+
+def route_genomes_by_mode(
+    genomes: Sequence[Genome],
+) -> Tuple[List[Genome], List[Genome], List[ModeRoutingRow]]:
+    """Resolve taxa/group inputs once, after length QC, with an audit trail.
+
+    A non-empty subgroup label remains part of the metadata and directory
+    structure. Routing is nevertheless based on the complete set represented
+    for each species:
+
+    * taxa prefers direct species genomes;
+    * when no direct genome exists, one true lower-rank taxonomic subgroup is
+      promoted as the species input;
+    * group compares two or more represented subgroup labels within a species;
+    * a single explicit group/population remains a group when its actual TaxID
+      is the species TaxID (for example a user-defined population label or the
+      Homo heidelbergensis exception).
+    """
+    by_species: Dict[Tuple[int, str], List[Genome]] = defaultdict(list)
+    for genome in genomes:
+        by_species[(genome.species_taxid, genome.species_name)].append(genome)
+
+    taxa_selected: List[Genome] = []
+    group_selected: List[Genome] = []
+    audit_rows: List[ModeRoutingRow] = []
+
+    for (species_taxid, species_name), members in sorted(
+        by_species.items(), key=lambda item: (item[0][1], item[0][0])
+    ):
+        ordered = sorted(members, key=lambda genome: (genome.subgroup_label, genome.accession))
+        direct = [genome for genome in ordered if not genome.subgroup_label]
+        subgroup = [genome for genome in ordered if genome.subgroup_label]
+        labels = tuple(sorted({genome.subgroup_label for genome in subgroup}))
+
+        if direct:
+            taxa_members = direct
+            taxa_decision = "direct_species_genomes"
+        elif (
+            len(labels) == 1
+            and subgroup
+            and all(genome.taxid != genome.species_taxid for genome in subgroup)
+        ):
+            taxa_members = subgroup
+            taxa_decision = "single_taxonomic_subgroup_fallback"
+        elif len(labels) > 1:
+            taxa_members = []
+            taxa_decision = "excluded_multiple_subgroups_without_direct_genome"
+        else:
+            taxa_members = []
+            taxa_decision = "excluded_explicit_group_without_direct_genome"
+
+        if len(labels) > 1:
+            group_members = subgroup
+            group_decision = "multiple_represented_subgroups"
+        elif subgroup and any(
+            genome.taxid == genome.species_taxid for genome in subgroup
+        ):
+            group_members = subgroup
+            group_decision = "explicit_user_defined_group"
+        elif subgroup:
+            group_members = []
+            group_decision = "single_taxonomic_subgroup_not_comparable"
+        else:
+            group_members = []
+            group_decision = "no_subgroup_genomes"
+
+        taxa_selected.extend(taxa_members)
+        group_selected.extend(group_members)
+        audit_rows.append(
+            ModeRoutingRow(
+                species_name=species_name,
+                species_taxid=species_taxid,
+                direct_genome_count=len(direct),
+                subgroup_genome_count=len(subgroup),
+                subgroup_labels=labels,
+                taxa_input_decision=taxa_decision,
+                taxa_accessions=tuple(genome.accession for genome in taxa_members),
+                group_input_decision=group_decision,
+                group_accessions=tuple(genome.accession for genome in group_members),
+            )
+        )
+
+    sort_key = lambda genome: (  # noqa: E731 - compact shared ordering key
+        genome.genus_name,
+        genome.species_name,
+        genome.subgroup_label,
+        genome.accession,
+    )
+    return sorted(taxa_selected, key=sort_key), sorted(group_selected, key=sort_key), audit_rows
+
+
+def write_mode_routing_manifest(path: Path, rows: Sequence[ModeRoutingRow]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wt", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(
+            (
+                "species_name",
+                "species_taxid",
+                "direct_genome_count",
+                "subgroup_genome_count",
+                "subgroup_labels",
+                "taxa_input_decision",
+                "taxa_accessions",
+                "group_input_decision",
+                "group_accessions",
+            )
+        )
+        for row in rows:
+            writer.writerow(
+                (
+                    row.species_name,
+                    row.species_taxid,
+                    row.direct_genome_count,
+                    row.subgroup_genome_count,
+                    ";".join(row.subgroup_labels),
+                    row.taxa_input_decision,
+                    ";".join(row.taxa_accessions),
+                    row.group_input_decision,
+                    ";".join(row.group_accessions),
+                )
+            )
 
 
 def organize_genomes(genomes: Sequence[Genome], method: str) -> None:
@@ -1575,22 +1715,15 @@ def run_taxa_mode(
     fraction: float,
     small_group_all_max: int,
 ) -> List[Tuple[Target, Path]]:
-    # Species-level taxa mode deliberately uses only FASTAs located directly in
-    # the species directory. Subgroup-labelled FASTAs belong exclusively to the
-    # group mode even though metadata maps them to the same species.
-    selected = [g for g in genomes if not g.subgroup_label]
-    excluded_count = len(genomes) - len(selected)
-    if excluded_count:
-        log(
-            f"taxa mode: excluded {excluded_count:,} subgroup-labelled genomes; "
-            "using species-directory genomes only"
-        )
-    if not selected:
+    # Mode membership is resolved once by route_genomes_by_mode after length
+    # QC. This input therefore contains direct species genomes plus any approved
+    # single-taxonomic-subgroup fallbacks.
+    if not genomes:
         log("WARNING: taxa mode has no eligible genomes; producing no taxa probe sets")
         return []
     species_groups: Dict[Target, List[Genome]] = defaultdict(list)
     genus_groups: Dict[Target, List[Genome]] = defaultdict(list)
-    for genome in selected:
+    for genome in genomes:
         species_groups[make_species_target(genome)].append(genome)
         genus_groups[make_genus_target(genome)].append(genome)
 
@@ -1736,12 +1869,19 @@ def run_group_mode(
     fraction: float,
     small_group_all_max: int,
 ) -> List[Tuple[Target, Path]]:
-    selected = [g for g in genomes if g.subgroup_label]
-    if not selected:
-        log("WARNING: group mode has no subgroup-labelled genomes")
+    # Mode membership is resolved once by route_genomes_by_mode. Every input
+    # here must retain its subgroup label for target construction.
+    if not genomes:
+        log("WARNING: group mode has no eligible subgroup genomes")
         return []
+    missing_labels = [genome.accession for genome in genomes if not genome.subgroup_label]
+    if missing_labels:
+        raise PipelineError(
+            "Internal group routing error: empty subgroup label for "
+            + ", ".join(missing_labels[:20])
+        )
     groups: Dict[Target, List[Genome]] = defaultdict(list)
-    for genome in selected:
+    for genome in genomes:
         groups[make_group_target(genome)].append(genome)
 
     owner: Dict[str, Optional[Target]] = {}
@@ -2198,6 +2338,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 f"All input genomes are shorter than --min-genome-length "
                 f"{args.min_genome_length:,}"
             )
+        taxa_genomes, group_genomes, routing_rows = route_genomes_by_mode(genomes)
+        log(
+            "Mode routing after length QC: "
+            f"taxa={len(taxa_genomes):,} genomes across "
+            f"{len({genome.species_taxid for genome in taxa_genomes}):,} species; "
+            f"group={len(group_genomes):,} genomes across "
+            f"{len({(genome.species_taxid, genome.taxid, genome.subgroup_label) for genome in group_genomes}):,} subgroups"
+        )
         if args.validate_only:
             log("Validation completed; no output was generated")
             return 0
@@ -2208,6 +2356,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             encoding="utf-8",
         )
         write_genome_length_qc(args.output_root, length_qc)
+        write_mode_routing_manifest(
+            args.output_root / "00_input_qc" / "mode_routing.tsv", routing_rows
+        )
         organize_genomes(genomes, args.organize_method)
         write_genome_manifest(args.output_root / "01_organized_genomes" / "manifest.tsv", genomes)
         log(f"Organized {len(genomes):,} genome FASTA files")
@@ -2236,7 +2387,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         generated: Dict[str, List[Tuple[Target, Path]]] = {}
         if "taxa" in modes:
             generated["taxa"] = run_taxa_mode(
-                genomes,
+                taxa_genomes,
                 window_files,
                 args.output_root / "03_eMito_taxa_generate",
                 args.representative_fraction,
@@ -2244,7 +2395,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
         if "group" in modes:
             generated["group"] = run_group_mode(
-                genomes,
+                group_genomes,
                 window_files,
                 args.output_root / "04_eMito_group_generate",
                 args.representative_fraction,

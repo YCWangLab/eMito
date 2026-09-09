@@ -1,3 +1,13 @@
 accession_id	species_name	taxid	subgroup_label
+NC_006853	Bos taurus	9913	
+NC_005044	Capra hircus	9925	
 NC_012920.1	Homo sapiens	9606	
 NC_002008.4	Canis lupus	9615	Canis lupus familiaris
+MZ042317.1	Canis lupus	143281	Canis lupus baileyi
+FJ032363.2	Canis lupus	554455	Canis lupus laniger
+NC_013840	Cervus hanglu	84702	Cervus hanglu yarkandensis
+EU725621.2	Homo sapiens	9606	Ancient_modern
+D38113.1	Homo sapiens	9606	Modern
+FN673705.1	Homo sapiens	741158	Homo sapiens subsp. 'Denisova'
+AM948965	Homo sapiens	63221	Homo sapiens neanderthalensis
+KF683087.1	Homo heidelbergensis	1425170	Homo heidelbergensis
