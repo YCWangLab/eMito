@@ -5,6 +5,11 @@ manuscript figures and aggregate workflow summaries. Tables are generated from
 the final production run rather than maintained manually, so obsolete results
 cannot silently remain in the repository.
 
+The previous tables were removed when the per-species subgroup-routing rules
+changed in eMito 0.1.4. Regenerate this directory from a completed 0.1.4-or-newer
+production run before quoting panel counts; the exporter will include the new
+`mode_routing.tsv` audit table.
+
 Expected generated files:
 
 | File | Contents |
