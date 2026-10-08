@@ -1,19 +1,10 @@
-# Script entry points
+# Scripts
 
-Install eMito first with `python -m pip install -e .`, then use the `emito`
-command documented in the repository README. These thin wrappers are provided
-for clusters and legacy workflows that prefer an explicit Python script.
+Run these from a source checkout with Python 3.9 or newer; installation is optional.
 
-| Script | Equivalent command |
-|---|---|
-| `run_emito_pipeline.py` | `emito run` |
-| `count_emito_mode_merge.py` | `emito summarize` |
-| `count_emito_probe_stages.py` | `emito stage-summary` |
-| `count_input_taxonomy.py` | `emito taxonomy-summary` |
-| `export_publication_metadata.py` | Export compact manuscript source tables from one completed run |
+- `eMito-prepare.py`, `eMito-taxa-generate.py`, `eMito-node-generate.py`, `eMito-access.py`, `eMito-collapse.py`, `eMito-merge.py`: independent current modules; each accepts `--help`.
+- `run_emito_pipeline.py`: equivalent to `emito`; pass a module name followed by its options.
+- `run_matched_comparison.py`: species-only comparison with and without collapse, using fresh inputs or a completed standard panel.
+- `audit_prepare_refseq.py`: offline audit/reference preparation; see `--help` for required inputs.
 
-Every argument is forwarded unchanged, for example:
-
-```bash
-python scripts/run_emito_pipeline.py --help
-```
+The `count_*` scripts and `export_publication_metadata.py` support the earlier integrated pipeline output layout only. They require an installed package and should be used for legacy outputs. Current modules write their own manifests and summary tables, as described in the root README.

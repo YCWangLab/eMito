@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Compatibility wrapper for ``emito run``."""
-
-from emito.pipeline import main
-
+"""Run an eMito module from a source checkout."""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from emito.cli import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

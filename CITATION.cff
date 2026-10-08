@@ -6,5 +6,5 @@ authors:
   - name: YCWangLab
 repository-code: "https://github.com/YCWangLab/eMito"
 license: MIT
-version: 0.1.4
-date-released: 2026-09-09
+version: 0.2.0
+date-released: 2026-10-08

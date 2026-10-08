@@ -1,358 +1,147 @@
-# eMito — Taxonomy-aware mitochondrial capture probe design
+# eMito
 
-eMito is a command-line toolkit for designing mitochondrial capture probes for
-ancient DNA, environmental DNA, and comparative mitogenomics. It combines
-within-taxon sequence alignment, representative k-mer discovery, taxonomic
-specificity, probe assessment, overlap collapsing, and final probe-set
-integration in one reproducible workflow.
+**eMito** designs mitochondrial capture probes using taxonomy-aware sequence comparisons and reference tiling. Six independent modules let users choose how to prepare genomes, generate probes, filter them, reduce overlap and combine sets.
 
-[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+| Module | Function |
+| --- | --- |
+| `eMito-prepare` | Validate inputs, filter genomes by length, normalise circular sequences, align and sample probe/k-mer windows |
+| `eMito-taxa-generate` | Generate species-, genus- and subgroup-specific candidates |
+| `eMito-node-generate` | Tile a selected reference for each requested taxonomic node |
+| `eMito-access` | Filter each input set by GC content, DUST complexity and complementary-sequence score |
+| `eMito-collapse` | Retain non-overlapping probes from each source genome within an input set |
+| `eMito-merge` | Combine sets and remove exact duplicate sequences |
 
-![eMito workflow](figures/emito_workflow.png)
-
-## Modes
-
-| Mode | Purpose | Input unit |
-|---|---|---|
-| `taxa` | Per-species probes filtered by species- and genus-specific k-mers | Direct species genomes, or one true taxonomic subgroup as fallback when no direct genome exists |
-| `group` | Subspecies- or population-specific probes | Species with multiple represented subgroups, plus explicit user-defined groups/populations |
-| `node` | Taxonomy-node tiling | One selected mitogenome per requested taxonomic node |
-| `access` | GC, complexity, and dimer assessment | Each generated target probe FASTA independently |
-| `collapse` | Coordinate-aware probe collapsing | Each target probe FASTA independently |
-| `merge` | Integrate terminal mode outputs | All selected probe FASTA files; final dedup is optional |
+Each module runs only the requested operation. Assessment, collapse and merging are optional and can be selected and ordered to suit an experiment.
 
 ## Installation
 
-eMito requires Python 3.9 or later and [MAFFT](https://mafft.cbrc.jp/alignment/software/).
-The Python package itself uses only the standard library.
+Requires Python 3.9 or newer. Install [MAFFT](https://mafft.cbrc.jp/alignment/software/) separately for the default alignment-enabled preparation.
 
 ```bash
 git clone https://github.com/YCWangLab/eMito.git
 cd eMito
-python -m pip install -e .
-emito info
+python3 -m pip install .
+emito --help
+emito prepare --help
 ```
 
-Install MAFFT with Conda if it is not already available:
+The installed commands `emito prepare` and `eMito-prepare` are equivalent; the same convention applies to the other five modules. Source-checkout wrappers also work without installing the package:
 
 ```bash
-conda install -c bioconda mafft
+python3 scripts/eMito-prepare.py --help
 ```
 
-## Input
+The Python implementation uses the standard library. MAFFT is not required when preparation uses `--no-align` or when processing existing probe sets.
 
-### Genome FASTA
+## Inputs
 
-Place one mitochondrial genome per FASTA file. Each file must contain exactly
-one record and be named `<accession_id>.fasta`:
+Provide an accession FASTA directory, NCBI `nodes.dmp` and `names.dmp` from the same taxonomy release, and a tab-separated metadata file with these four columns:
 
 ```text
-fasta/
-├── NC_012920.1.fasta
-├── NC_002008.4.fasta
-└── ...
+accession_id	species_name	taxid	subgroup_label
+NC_012920.1	Homo sapiens	9606	
 ```
 
-Records shorter than `--min-genome-length` (10,000 bp by default) are excluded
-before alignment and all probe-design modes. Windows containing characters
-other than A, T, C, or G are removed.
+Use one ungapped mitochondrial genome per FASTA, named `<accession_id>.fasta`, including the accession version. `species_name` must match the scientific name of the species ancestor of `taxid`. Leave `subgroup_label` empty for ordinary species records; use it to distinguish subspecies, populations or other intended within-species groups. See [examples/metadata.tsv](examples/metadata.tsv). Input accessions must be unique.
 
-### Metadata
+## Standard panel
 
-Metadata is a tab-separated file with four required columns:
-
-```text
-accession_id    species_name    taxid    subgroup_label
-```
-
-| Column | Meaning |
-|---|---|
-| `accession_id` | Accession matching `<accession_id>.fasta` |
-| `species_name` | NCBI scientific species name; subspecies/populations map to their parent species |
-| `taxid` | Actual NCBI TaxID for the record; it is not replaced by the species TaxID |
-| `subgroup_label` | Subspecies/population name; leave empty for a species-level genome |
-
-Expanded example (tabs separate the four columns):
-
-```text
-accession_id  species_name          taxid   subgroup_label
-NC_006853     Bos taurus            9913
-NC_005044     Capra hircus          9925
-NC_012920.1   Homo sapiens          9606
-NC_002008.4   Canis lupus           9615    Canis lupus familiaris
-MZ042317.1    Canis lupus           143281  Canis lupus baileyi
-FJ032363.2    Canis lupus           554455  Canis lupus laniger
-NC_013840     Cervus hanglu         84702   Cervus hanglu yarkandensis
-EU725621.2    Homo sapiens          9606    Ancient_modern
-D38113.1      Homo sapiens          9606    Modern
-FN673705.1    Homo sapiens          741158  Homo sapiens subsp. 'Denisova'
-AM948965      Homo sapiens          63221   Homo sapiens neanderthalensis
-KF683087.1    Homo heidelbergensis  1425170 Homo heidelbergensis
-```
-
-These rows demonstrate multiple direct genomes from different genera, several
-subgroups of the same species, taxonomy-defined subspecies, user-defined
-population labels, and the intentional *Homo heidelbergensis* exception. The
-`taxid` always remains the actual record TaxID; routing never rewrites it to the
-species TaxID.
-
-After minimum-length filtering, eMito resolves mode membership per species:
-
-- `taxa` prefers genomes with an empty subgroup label. If these exist, labelled
-  subgroup genomes from the same species are not mixed into its species-level
-  calculation. If there is no direct genome and exactly one represented
-  taxonomy-defined subgroup (actual TaxID differs from species TaxID), those
-  genomes are used as a species-level fallback while retaining their original
-  metadata and directory labels.
-- `group` uses all labelled genomes when at least two subgroup labels are
-  represented under a species. A single explicit user-defined group or
-  population is also retained when its record TaxID equals the species TaxID;
-  this supports labels such as `Modern`, `Ancient_modern`, and the intentional
-  *Homo heidelbergensis* exception. A lone taxonomy-defined subgroup routed to
-  `taxa` is not also emitted as a one-member group comparison.
-- `node` uses all length-qualified genomes, including subgroup genomes.
-
-The complete decision for every species is written to
-`00_input_qc/mode_routing.tsv`, including the exact accessions passed to `taxa`
-and `group`.
-
-### NCBI taxonomy
-
-Download `names.dmp` and `nodes.dmp` from the
-[NCBI taxdump archive](https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz).
-eMito maps every input TaxID to its species, genus, and requested node rank and
-checks the metadata species name against the NCBI scientific name.
-
-## Quick start
-
-Validate inputs without generating output:
+This example assesses species/subgroup candidates, supplements them with family-reference tiling and merges the results. It does not collapse either branch.
 
 ```bash
-emito validate \
-  --metadata metadata.tsv \
-  --fasta-dir fasta \
-  --names-dmp taxdump/names.dmp \
-  --nodes-dmp taxdump/nodes.dmp
+emito prepare --metadata metadata.tsv --fasta-dir fasta \
+  --names-dmp taxdump/names.dmp --nodes-dmp taxdump/nodes.dmp \
+  --min-genome-length 10000 --threads 4 --output results/01_prepare
+
+emito taxa-generate --prepared results/01_prepare --output results/02_taxa_generate
+emito access --inputs results/02_taxa_generate --output results/03_taxa_access
+emito node-generate --prepared results/01_prepare --node-rank family \
+  --output results/04_node_generate
+emito merge --inputs results/03_taxa_access results/04_node_generate \
+  --output results/05_final_merge
 ```
 
-Run the default workflow:
+The final FASTA is `results/05_final_merge/probe_sets/merged.fasta`. Counts are recorded in `merge_summary.json`. Every module requires a **new output directory**; completed outputs are not overwritten or resumed. A successful stage writes `COMPLETE`.
+
+For this same combination, a configurable launcher is provided:
 
 ```bash
-emito run \
-  --metadata metadata.tsv \
-  --fasta-dir fasta \
-  --names-dmp taxdump/names.dmp \
-  --nodes-dmp taxdump/nodes.dmp \
-  --output-root emito_output \
-  --threads 4
+export FASTA_DIR=/absolute/path/fasta
+export NAMES_DMP=/absolute/path/taxdump/names.dmp
+export NODES_DMP=/absolute/path/taxdump/nodes.dmp
+MIN_GENOME_LENGTH=8000 bash run_standard_panel.sh \
+  /absolute/path/metadata.tsv /absolute/path/new_results
 ```
 
-Default generation modes are `taxa,group,node`. By default, `access` is run for
-`taxa`; `collapse` is disabled for all three generation modes; final merge
-deduplication is enabled.
+`MIN_GENOME_LENGTH` defaults to **10000 bp**, and accepts any positive integer. The CLI equivalent is `--min-genome-length 8000`. `PIPELINE_PYTHON`, `MAFFT_BIN` and `THREADS` can override executable selection and worker count. The launcher requires absolute input/output paths.
 
-### Important defaults
-
-| Option | Default |
-|---|---:|
-| `--window-length` | 52 bp |
-| `--probe-step` | 5 bp |
-| `--kmer-step` | 1 bp |
-| `--min-genome-length` | 10,000 bp |
-| `--representative-fraction` | 0.75 |
-| `--node-rank` | family |
-| `--node-step` | 5 bp |
-| `--taxa-access` | enabled |
-| `--gc-min` / `--gc-max` | 35% / 65% |
-| `--complexity-min` / `--complexity-max` | 0 / 2 |
-| `--dimer-k` | 11 bp |
-| `--dimer` | 0.15 |
-| all other per-mode access/collapse switches | disabled |
-| `--final-dedup` | enabled |
-
-Run a taxa-only panel with per-species access and collapse:
+For SLURM, submit from the repository root after exporting the input variables:
 
 ```bash
-emito run \
-  --metadata metadata.tsv \
-  --fasta-dir fasta \
-  --names-dmp taxdump/names.dmp \
-  --nodes-dmp taxdump/nodes.dmp \
-  --output-root taxa_access_collapse \
-  --modes taxa \
-  --taxa-access \
-  --taxa-collapse
+sbatch submit_standard_panel.sh /absolute/path/metadata.tsv /absolute/path/new_results
 ```
 
-Keep duplicate records during the final merge:
+Use `EMITO_CODE_DIR=/absolute/path/eMito` if submitting from another directory. Set partition, memory and time through your site's `sbatch` options. The example requests four CPUs and 100 GB; adjust these to the dataset and cluster.
+
+## Preparation and specificity
+
+`prepare` filters genomes below the requested minimum length. Within each species pool or subgroup, it selects a reference by preferring `NC_` accessions, then the lowest proportion of non-ATCG bases, with accession order breaking ties. It normalises strand and circular origin to that reference and aligns pools containing multiple genomes with MAFFT `--auto`.
+
+Candidate probes are sampled at fixed intervals: **52 bp long, every 5 reference bases** by default. Reference positions are mapped through the alignment to each genome. A gap at the start skips that window; otherwise the program extracts consecutive ungapped bases. Windows crossing the end continue from the beginning of the circular genome. Windows containing non-ATCG bases are removed. Comparison k-mers use the same length with a default **1 bp** step and include reverse complements; candidate probes do not receive an additional reverse-complement copy. `--window-length`, `--probe-step` and `--kmer-step` are adjustable. `--no-align` samples the raw circular genomes and skips both alignment and strand/origin normalisation.
+
+`taxa-generate` builds representative k-mer sets from sequences present in all genomes of a target with up to three genomes, or at least `ceil(0.75 × n)` genomes for larger targets. Configure this using `--small-group-all-max` and `--representative-fraction`. Species-specific sequences are absent from the representative sets of other species. Genus-restricted sequences can be shared within a genus but are absent from other genera. Each species' candidates are intersected with its eligible sequences and deduplicated within the target.
+
+Species analysis preferentially uses records without a subgroup assignment. If none are available and only one taxonomic subgroup represents a species, that subgroup supplies the species analysis. Multiple subgroups are compared separately; explicit populations defined at the species TaxID remain subgroup targets. When direct species records and one taxonomic subgroup coexist, the subgroup is checked against both other subgroup representatives and other species' representatives. These decisions are saved in the preparation output. Subgroup generation is part of `taxa-generate`; there is no separate group-generation command.
+
+`node-generate` uses all genomes that passed preparation QC, independently of their species/subgroup role. It selects one reference per family by default, using the same reference preference, and tiles 52 bp probes at 5 bp intervals. Choose another rank with `--node-rank` or supply `--selection selection.tsv` with `node_taxid` and `accession_id` columns. Every node must have a manual selection unless `--allow-auto-unlisted` is supplied. Node windows use the sequence coordinate system saved during preparation.
+
+## Filtering, collapse and merging
+
+`access`, `collapse` and `merge` accept completed output bundles or individual probe FASTAs through `--inputs`.
+
+- **Assessment:** default GC and DUST ranges are 35–65% and 0–2. Dimer scores count reverse-complement 11-mer matches in the pool remaining after these filters, exclude self-contribution and normalise by window count and pool size. The default `--dimer 0.15` uses the score at zero-based index `floor(0.15 × N)` as its cutoff, retaining scores at or below it, including ties. Values at least 1 specify an absolute cutoff; values at most 0 disable this filter. Exact duplicates are removed within each assessed input set.
+- **Collapse:** probes are processed by genomic position and retained only when they do not overlap an earlier retained probe from the same accession, including across the circular origin. Different genomes' coordinates are not collapsed together. Input headers must retain position information; conflicting coordinate frames cause an error.
+- **Merge:** exact sequence deduplication is enabled by default. `--no-dedup` disables deduplication at this step. Identical strings retain the first source header; reverse-complement strings are not considered identical.
+
+For example, create a lower-density alternative without changing the assessed input:
 
 ```bash
-emito run ... --no-final-dedup
+emito collapse --inputs results/03_taxa_access --output results/03_taxa_collapsed
+emito merge --inputs results/03_taxa_collapsed results/04_node_generate \
+  --output results/06_collapsed_panel
 ```
 
-Use `emito run --help` for every parameter and its default.
+The chosen order matters: merging before assessment changes the Dimer scoring pool, while deduplication before collapse discards alternative source coordinates.
 
-## Generation logic
+## Matched comparisons with and without collapse
 
-### Alignment and windows
-
-Direct genomes are aligned within species and labelled genomes within subgroup.
-An `NC_` accession is preferred as reference. eMito normalizes strand and
-circular origin, runs MAFFT, and uses shared reference-alignment coordinates to
-generate independent windows for every accession. A single-subgroup `taxa`
-fallback therefore uses the alignment already built for that subgroup; records
-are never concatenated into one genome. Default windows are 52 bp, with probe
-step 5 and k-mer step 1. Forward and reverse-complement k-mers are combined for
-presence counting; probes are generated in the forward orientation.
-
-### Representative k-mers
-
-Representative k-mers must occur in:
-
-| Number of genomes | Required presence |
-|---:|---:|
-| 1–3 | All genomes |
-| 4 | 3 genomes |
-| 5 | 4 genomes |
-| >5 | At least 75% (rounded up) |
-
-Repeated occurrences within one genome count as presence in one individual.
-
-### `taxa`
-
-For every routed species input, eMito combines:
-
-1. k-mers unique to that species among all species representative sets; and
-2. k-mers unique to its genus among all genera, restricted back to that
-   species' representative set.
-
-The combined k-mers are intersected independently with every genome's probe
-windows. Intersections from the same species are merged and deduplicated into
-one Taxa-specific probe FASTA. Genus-specific k-mers are a filtering criterion;
-they do not create separate genus probe output files.
-
-### `group`
-
-Representative k-mers are generated for every subgroup selected by the routing
-rules above. K-mers present in only one selected subgroup representative set
-are intersected with that subgroup's individual probe windows, then merged and
-deduplicated into one Group-specific probe FASTA per subgroup. Specificity is
-evaluated globally against every subgroup selected for `group`; a lone
-taxonomy-defined subgroup used as the species fallback is not included in this
-comparison.
-
-### `node`
-
-Input genomes are grouped at `--node-rank` (`family` by default). One genome is
-selected per node, preferring `NC_` accessions and using a reproducible random
-seed when multiple candidates remain. The selected genome is tiled directly
-with 52-bp probes at `--node-step 5` by default.
-
-## Optional processing and final integration
-
-`access` and `collapse` are applied independently to every target FASTA—not to
-all species or groups merged together. If both are enabled, the order is:
-
-```text
-generation -> access -> collapse
-```
-
-Default `access` filters match the corresponding eProbe assessment settings:
-GC 35–65%, DUST-like complexity 0–2, dimer k=11, and `--dimer 0.15`. The
-dimer score measures reverse-complement k-mer complementarity between probes
-that already passed GC and complexity filters; each probe's self-contribution
-is subtracted. A dimer value between 0 and 1 selects the corresponding score
-quantile as an inclusive cutoff, a value of 1 or greater is an absolute score
-cutoff, and a value of 0 or less disables dimer filtering. Exact duplicate
-sequences are then removed within each assessed target. `collapse` groups
-probes by accession and greedily retains non-overlapping probes in coordinate
-order.
-
-The terminal output of each enabled generation mode is then merged. Exact
-uppercase ATCG-sequence deduplication is enabled by default (`--final-dedup`)
-and can be disabled with `--no-final-dedup`.
-
-## Output
-
-```text
-emito_output/
-├── 00_config.json
-├── 00_input_qc/
-├── 01_organized_genomes/
-├── 02_alignments/
-├── 02_windows/
-├── 03_eMito_taxa_generate/
-├── 04_eMito_group_generate/
-├── 05_eMito_node_generate/
-├── 06_optional_modes/
-└── 07_final_probe_set/
-    ├── final_probe_set.fasta
-    └── input_probe_files.tsv
-```
-
-Only directories for enabled generation/optional modes are created, except
-that common alignment/window preprocessing is shared by the generation modes.
-
-## Summaries
+The comparison runner creates species-only panels with both branches: `access → merge` and `access → collapse → merge`. It excludes subgroup and node supplements from the comparison.
 
 ```bash
-# Generation/access/collapse/final-merge counts by mode
-emito summarize --output-root emito_output
+python3 scripts/run_matched_comparison.py \
+  --metadata reference_metadata.tsv --fasta-dir reference_fasta \
+  --names-dmp taxdump/names.dmp --nodes-dmp taxdump/nodes.dmp \
+  --min-genome-length 10000 --threads 4 --output comparisons/reference
 
-# Input genome, species, genus, and family counts
-emito taxonomy-summary --output-root emito_output
-
-# Detailed probe and k-mer counts at every stage
-emito stage-summary --output-root emito_output
-
-# Recompute and summarize the per-filter eMito-access counts
-emito access-summary --output-root emito_output --mode taxa
+python3 scripts/run_matched_comparison.py \
+  --existing-standard results --output comparisons/emito
 ```
 
-## Figures and source data
+For an already selected one-reference-per-species dataset, add `--no-align --require-single-reference`. Use an explicit smaller `--min-genome-length` if short references should be included. Reusing a standard panel preserves its original preparation and length filter. The runner writes `comparison_summary.tsv`, separate FASTAs in `04_no_collapse_merge` and `06_collapse_merge`, and `COMPLETE` after both branches finish. `submit_matched_panel.sh` accepts the same arguments for SLURM. `scripts/audit_prepare_refseq.py --help` describes the optional offline reference audit.
 
-The workflow and manuscript figures are stored in [`figures/`](figures/).
-Their compact, tab-separated source tables are generated from a completed run
-with [`scripts/export_publication_metadata.py`](scripts/export_publication_metadata.py);
-see [`metadata/README.md`](metadata/README.md) for the expected files.
+## Outputs and migration
 
-![Probe filtering and focal taxa](figures/probe_filtering_summary.png)
+Preparation records input/QC decisions, normalized genomes, alignments, windows and `prepared.json`. Probe bundles contain `manifest.tsv`, `bundle.json`, FASTAs and `COMPLETE`. The manifest maps targets to FASTAs and counts. Filtering and collapse also write `processing_summary.tsv`; merge writes `merge_inputs.tsv` and `merge_summary.json`. Keep stage directories together: prepared data and some comparison views refer to upstream files.
 
-The genus-level distribution is provided as an editable vector figure:
-[`final_probe_genus_tree.pdf`](figures/final_probe_genus_tree.pdf). Additional
-evaluation figures include [`capture_vs_shotgun.pdf`](figures/capture_vs_shotgun.pdf),
-[`pathphynder_ovis_bos.pdf`](figures/pathphynder_ovis_bos.pdf), and
-[`rarefaction_ovis.pdf`](figures/rarefaction_ovis.pdf).
+The modular commands replace the previous `emito run` workflow. Run old commands explicitly as `emito legacy run`, `emito legacy summarize`, `emito legacy stage-summary`, `emito legacy taxonomy-summary` or `emito legacy access-summary` when reproducing or inspecting the old output layout. Existing reporting wrappers and publication exporters target that legacy layout; they do not summarize modular output bundles. Use the new manifests and summaries for current runs. The earlier implementation and history remain available for reproducibility.
 
-## Reproducibility
-
-Every run records all resolved arguments in `00_config.json`. Alignment inputs,
-MAFFT logs, normalization decisions, selected node genomes, target manifests,
-and the exact terminal files used for the final merge are retained under the
-output root.
-
-## Tests
+## Testing and citation
 
 ```bash
-python -m unittest discover -s tests -v
+python3 -m pip install -e '.[test]'
+python3 -m unittest discover -s tests -v
 ```
 
-The test suite uses a generated synthetic dataset and does not require a local
-NCBI taxdump or a production MAFFT installation. See [`test_data/`](test_data/)
-for the covered behavior. A ready-to-enable GitHub Actions workflow is provided
-at [`examples/github-actions-tests.yml`](examples/github-actions-tests.yml).
+Tests cover circular windows and collapse, ambiguous-base handling, routing, subgroup backgrounds, independent modules and both matched-comparison branches. Synthetic alignment tests mock MAFFT; they do not replace validation on a production dataset. A GitHub Actions template is available in `examples/github-actions-tests.yml`.
 
-## Citation
-
-Manuscript in preparation. Please cite this GitHub repository until the paper
-is published.
-
-## Issues and contributions
-
-Bug reports and pull requests are welcome through the
-[issue tracker](https://github.com/YCWangLab/eMito/issues). See
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for development instructions.
-
-## License
-
-eMito is released under the [MIT License](LICENSE).
+See [CITATION.cff](CITATION.cff) for citation metadata and [LICENSE](LICENSE) for the MIT licence.

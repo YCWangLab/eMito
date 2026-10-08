@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "emito"
-version = "0.1.4"
+version = "0.2.0"
 description = "Taxonomy-aware mitochondrial capture probe design toolkit"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -42,6 +42,12 @@ Issues = "https://github.com/YCWangLab/eMito/issues"
 
 [project.scripts]
 emito = "emito.cli:main"
+eMito-prepare = "emito.entrypoints:prepare"
+eMito-taxa-generate = "emito.entrypoints:taxa_generate"
+eMito-node-generate = "emito.entrypoints:node_generate"
+eMito-access = "emito.entrypoints:access"
+eMito-collapse = "emito.entrypoints:collapse"
+eMito-merge = "emito.entrypoints:merge"
 
 [tool.setuptools.packages.find]
 where = ["src"]
